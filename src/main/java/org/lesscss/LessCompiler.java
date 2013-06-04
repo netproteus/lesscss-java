@@ -21,6 +21,7 @@ import java.net.URL;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+
 import org.apache.commons.io.FileUtils;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
@@ -30,6 +31,8 @@ import org.mozilla.javascript.JavaScriptException;
 import org.mozilla.javascript.Scriptable;
 import org.mozilla.javascript.ScriptableObject;
 import org.mozilla.javascript.tools.shell.Global;
+
+import com.badoo.mobile.utils.IOUtilX;
 
 /**
  * The LESS compiler to compile LESS sources to CSS stylesheets.
@@ -203,6 +206,8 @@ public class LessCompiler {
         this.encoding = encoding;
     }
     
+    private String lesscPath = null;
+    
     /**
      * Initializes this <code>LessCompiler</code>.
      * <p>
@@ -212,37 +217,55 @@ public class LessCompiler {
     public synchronized void init() {
         long start = System.currentTimeMillis();
 
+        String path = null;
+        boolean foundLessc = false;
+        
         try {
-	        Context cx = Context.enter();
-	        cx.setOptimizationLevel(-1); 
-	        cx.setLanguageVersion(Context.VERSION_1_7);
-	        
-	        Global global = new Global(); 
-	        global.init(cx); 
-	        
-	        scope = cx.initStandardObjects(global);
-	        
-	        List<URL> jsUrls = new ArrayList<URL>(2 + customJs.size());
-	        jsUrls.add(envJs);
-	        jsUrls.add(lessJs);
-	        jsUrls.addAll(customJs);
-	        
-	        for(URL url : jsUrls){
-		        InputStreamReader inputStreamReader = new InputStreamReader(url.openConnection().getInputStream());
-		        try{
-		        	cx.evaluateReader(scope, inputStreamReader, url.toString(), 1, null);
-		        }finally{
-		        	inputStreamReader.close();
-		        }
-	        }
-            doIt = cx.compileFunction(scope, COMPILE_STRING, "doIt.js", 1, null);
+            Process p = Runtime.getRuntime().exec("which lessc");
+            path = IOUtilX.loadFromStream(p.getInputStream()).split("\n")[0];
+            foundLessc = (p.waitFor() == 0);
         }
-        catch (Exception e) {
-            String message = "Failed to initialize LESS compiler.";
-            log.error(message, e);
-            throw new IllegalStateException(message, e);
-        }finally{
-        	Context.exit();
+        catch (Throwable t) {
+            t.printStackTrace();
+        }
+        
+        if (foundLessc) {
+            System.out.println("Using " + path + " for less compilation");
+            this.lesscPath = path;
+        }
+        else {
+            try {
+    	        Context cx = Context.enter();
+    	        cx.setOptimizationLevel(-1); 
+    	        cx.setLanguageVersion(Context.VERSION_1_7);
+    	        
+    	        Global global = new Global(); 
+    	        global.init(cx); 
+    	        
+    	        scope = cx.initStandardObjects(global);
+    	        
+    	        List<URL> jsUrls = new ArrayList<URL>(2 + customJs.size());
+    	        jsUrls.add(envJs);
+    	        jsUrls.add(lessJs);
+    	        jsUrls.addAll(customJs);
+    	        
+    	        for(URL url : jsUrls){
+    		        InputStreamReader inputStreamReader = new InputStreamReader(url.openConnection().getInputStream());
+    		        try{
+    		        	cx.evaluateReader(scope, inputStreamReader, url.toString(), 1, null);
+    		        }finally{
+    		        	inputStreamReader.close();
+    		        }
+    	        }
+                doIt = cx.compileFunction(scope, COMPILE_STRING, "doIt.js", 1, null);
+            }
+            catch (Exception e) {
+                String message = "Failed to initialize LESS compiler.";
+                log.error(message, e);
+                throw new IllegalStateException(message, e);
+            }finally{
+            	Context.exit();
+            }
         }
         
         if (log.isDebugEnabled()) {
@@ -263,6 +286,34 @@ public class LessCompiler {
 	        }
     	}
         
+    	if (lesscPath != null) {
+    	    
+    	    File inputFile;
+            try {
+                inputFile = File.createTempFile("input", ".less");
+                File outputFile = File.createTempFile("output", ".css");
+                
+                IOUtilX.writeToFile(inputFile, input);
+                
+                Process p = Runtime.getRuntime().exec(lesscPath + " " + inputFile.getAbsolutePath() + " " + outputFile.getAbsolutePath());
+                
+                p.waitFor();
+                
+                String output = IOUtilX.loadFile(outputFile);
+                
+                inputFile.delete();
+                outputFile.delete();
+                
+                return output;
+            }
+            catch (IOException e) {
+                e.printStackTrace();
+            }
+            catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+    	}
+    	
         long start = System.currentTimeMillis();
         
         try {
